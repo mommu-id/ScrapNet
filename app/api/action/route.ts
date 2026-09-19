@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { authorized } from '../../../lib/auth';
-import { db } from '../../../lib/db';
+import { db, log } from '../../../lib/db';
 import { discover, scrape, addManualProvider, withLock } from '../../../lib/actions';
 
 export const maxDuration = 120;
@@ -11,14 +11,16 @@ const input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('provider'), id: z.string().uuid(), status: z.enum(['approved', 'rejected']) }),
   z.object({ action: z.literal('scrape'), id: z.string().uuid() }),
   z.object({ action: z.literal('verify'), id: z.string().uuid() }),
-  z.object({ action: z.literal('discard'), id: z.string().uuid() })
+  z.object({ action: z.literal('discard'), id: z.string().uuid() }),
+  z.object({ action: z.literal('delete_packages'), ids: z.array(z.string().uuid()).min(1).max(1000) }),
+  z.object({ action: z.literal('delete_provider'), id: z.string().uuid() })
 ]);
 
 export async function POST(request: Request) {
   if (!authorized(request)) return Response.json({ error: 'Kunci admin tidak valid atau belum diatur (minimal 24 karakter).' }, { status: 401 });
   try {
     const raw = await request.text();
-    if (raw.length > 4096) return Response.json({ error: 'Permintaan terlalu besar.' }, { status: 413 });
+    if (raw.length > 65536) return Response.json({ error: 'Permintaan terlalu besar.' }, { status: 413 });
     const parsed = input.safeParse(JSON.parse(raw));
     if (!parsed.success) return Response.json({ error: 'Isian tidak valid.' }, { status: 400 });
     const body = parsed.data;
@@ -34,6 +36,19 @@ export async function POST(request: Request) {
       if (body.action === 'discard') {
         await db()`DELETE FROM packages WHERE id=${body.id} AND data->>'status'='review'`;
         return 'Kandidat paket dihapus.';
+      }
+      if (body.action === 'delete_packages') {
+        const sql = db();
+        const deleted = await sql`DELETE FROM packages WHERE id IN ${sql(body.ids)} RETURNING id`;
+        await log('Hapus Paket', `${deleted.length} paket berhasil dihapus.`);
+        return `${deleted.length} paket berhasil dihapus.`;
+      }
+      if (body.action === 'delete_provider') {
+        const sql = db();
+        await sql`DELETE FROM packages WHERE provider_id=${body.id}`;
+        await sql`DELETE FROM providers WHERE id=${body.id}`;
+        await log('Hapus Provider', 'Provider dan paket terkait berhasil dihapus.');
+        return 'Provider dan semua paketnya berhasil dihapus.';
       }
       const rows = await db()`UPDATE packages SET data=jsonb_set(data,'{status}','"verified"'::jsonb) WHERE id=${body.id} RETURNING id`;
       if (!rows.length) throw new Error('Paket tidak ditemukan.');
