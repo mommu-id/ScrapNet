@@ -110,6 +110,43 @@ export async function addManualProvider(name: string, rawUrl: string, city: stri
   return `Provider ${cleanName} berhasil ditambahkan dan disetujui. Silakan klik "Ambil paket".`;
 }
 
+async function fetchOxygenPackages(): Promise<{ name: string; speed: number; price: number; url: string; evidence: string }[]> {
+  const key = 'b95f117190e108bcd475ccc23b2d1b0ddac3fbc0566d6b024113c757a6089ffc';
+  const slugs = ['stream', 'streamPlus'];
+  const results: { name: string; speed: number; price: number; url: string; evidence: string }[] = [];
+  for (const slug of slugs) {
+    try {
+      const res = await fetch(`https://core.oxygen.id/api/v1/products/${slug}`, {
+        headers: { 'x-api-key': key, 'Referer': 'https://home.oxygen.id/' },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const group = json.data?.[0];
+        if (group && Array.isArray(group.packages)) {
+          for (const pkg of group.packages) {
+            const speedNum = Number(String(pkg.speed || '').replace(/\D/g, ''));
+            const priceNum = Number(String(pkg.price || '').replace(/\D/g, ''));
+            if (speedNum > 0 && priceNum > 20000) {
+              const url = slug === 'streamPlus' ? 'https://home.oxygen.id/paket/stream-plus' : 'https://home.oxygen.id/paket/stream';
+              results.push({
+                name: `${group.name} ${pkg.title || `${speedNum} Mbps`}`,
+                speed: speedNum,
+                price: priceNum,
+                url,
+                evidence: `${group.name} ${pkg.title || ''}: ${pkg.speed} - Rp ${pkg.price}/bulan. Benefit: ${(pkg.benefit || []).join(', ')}`
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // skip error
+    }
+  }
+  return results;
+}
+
 export async function scrape(id: string) {
   const rows = await db()`SELECT data FROM providers WHERE id=${id}`;
   const p = rows[0] ? parseJson<Provider>(rows[0].data) : undefined;
@@ -120,16 +157,25 @@ export async function scrape(id: string) {
     const pages = [main];
     let isInsecure = !!main.insecureCert;
     let items = extractPackages(main.html).map(x => ({ ...x, url: main.url }));
-    if (!items.length) {
-      for (const link of packageLinks(main.html, p.url)) {
-        try {
-          const page = await permittedPage(link);
-          pages.push(page);
-          if (page.insecureCert) isInsecure = true;
-          items.push(...extractPackages(page.html).map(x => ({ ...x, url: page.url })));
-        } catch {
-          // Lewati link jika gagal
+    for (const link of packageLinks(main.html, p.url)) {
+      try {
+        const page = await permittedPage(link);
+        pages.push(page);
+        if (page.insecureCert) isInsecure = true;
+        items.push(...extractPackages(page.html).map(x => ({ ...x, url: page.url })));
+      } catch {
+        // Lewati link jika gagal
+      }
+    }
+
+    if (/oxygen\.id/i.test(p.domain) || /oxygen\.id/i.test(p.url)) {
+      try {
+        const oxygenPackages = await fetchOxygenPackages();
+        if (oxygenPackages.length) {
+          items.push(...oxygenPackages);
         }
+      } catch (e) {
+        console.warn('Oxygen adapter error:', e);
       }
     }
 
