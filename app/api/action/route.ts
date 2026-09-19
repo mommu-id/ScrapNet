@@ -6,18 +6,21 @@ import { discover, scrape, addManualProvider, withLock } from '../../../lib/acti
 
 export const maxDuration = 120;
 
+const idSchema = z.string().trim().min(1).max(100);
+
 const input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('discover'), city: z.string().trim().min(2).max(80) }),
   z.object({ action: z.literal('add_provider'), name: z.string().trim().min(2).max(100), url: z.string().url().max(200), city: z.string().trim().min(2).max(80) }),
-  z.object({ action: z.literal('provider'), id: z.string().uuid(), status: z.enum(['approved', 'rejected']) }),
-  z.object({ action: z.literal('scrape'), id: z.string().uuid() }),
-  z.object({ action: z.literal('verify'), id: z.string().uuid() }),
-  z.object({ action: z.literal('discard'), id: z.string().uuid() }),
-  z.object({ action: z.literal('delete_packages'), ids: z.array(z.string().uuid()).min(1).max(1000) }),
-  z.object({ action: z.literal('delete_provider'), id: z.string().uuid() }),
+  z.object({ action: z.literal('provider'), id: idSchema, status: z.enum(['approved', 'rejected']) }),
+  z.object({ action: z.literal('scrape'), id: idSchema }),
+  z.object({ action: z.literal('verify'), id: idSchema }),
+  z.object({ action: z.literal('discard'), id: idSchema }),
+  z.object({ action: z.literal('delete_packages'), ids: z.array(idSchema).min(1).max(1000) }),
+  z.object({ action: z.literal('delete_provider'), id: idSchema }),
+  z.object({ action: z.literal('delete_providers'), ids: z.array(idSchema).min(1).max(1000) }),
   z.object({
     action: z.literal('update_package'),
-    id: z.string().uuid(),
+    id: idSchema,
     name: z.string().trim().min(1).max(100),
     speed: z.number().int().min(1).max(10000),
     price: z.number().int().min(1000).max(100000000),
@@ -49,7 +52,14 @@ export async function POST(request: Request) {
       }
       if (body.action === 'delete_packages') {
         const sql = db();
-        const deleted = await sql`DELETE FROM packages WHERE id IN ${sql(body.ids)} RETURNING id`;
+        const targets = await sql`SELECT id, provider_id, data FROM packages WHERE id = ANY(${body.ids}::text[])`;
+        const deleted = await sql`DELETE FROM packages WHERE id = ANY(${body.ids}::text[]) RETURNING id`;
+        for (const t of targets) {
+          const d = parseJson<Package>(t.data);
+          if (d && d.url && d.speed) {
+            await sql`DELETE FROM packages WHERE provider_id=${t.provider_id} AND data->>'url'=${d.url} AND (data->>'speed')::numeric=${d.speed}`;
+          }
+        }
         await log('Hapus Paket', `${deleted.length} paket berhasil dihapus.`);
         return `${deleted.length} paket berhasil dihapus.`;
       }
@@ -59,6 +69,13 @@ export async function POST(request: Request) {
         await sql`DELETE FROM providers WHERE id=${body.id}`;
         await log('Hapus Provider', 'Provider dan paket terkait berhasil dihapus.');
         return 'Provider dan semua paketnya berhasil dihapus.';
+      }
+      if (body.action === 'delete_providers') {
+        const sql = db();
+        await sql`DELETE FROM packages WHERE provider_id = ANY(${body.ids}::text[])`;
+        const deleted = await sql`DELETE FROM providers WHERE id = ANY(${body.ids}::text[]) RETURNING id`;
+        await log('Hapus Provider', `${deleted.length} provider dan semua paket terkait berhasil dihapus.`);
+        return `${deleted.length} provider dan semua paketnya berhasil dihapus.`;
       }
       if (body.action === 'update_package') {
         const sql = db();

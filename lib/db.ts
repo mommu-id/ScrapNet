@@ -40,15 +40,15 @@ export async function snapshot(): Promise<Snapshot> {
   try {
     const sql = db();
     const [p, k, r] = await Promise.all([
-      sql`SELECT data FROM providers ORDER BY created_at DESC LIMIT 300`,
-      sql`SELECT data FROM packages ORDER BY created_at DESC LIMIT 1000`,
-      sql`SELECT data FROM runs ORDER BY created_at DESC LIMIT 100`
+      sql`SELECT id, data FROM providers ORDER BY created_at DESC LIMIT 300`,
+      sql`SELECT id, data FROM packages ORDER BY created_at DESC LIMIT 1000`,
+      sql`SELECT id, data FROM runs ORDER BY created_at DESC LIMIT 100`
     ]);
     return {
       demo: false,
-      providers: p.map(x => parseJson<Provider>(x.data)),
-      packages: k.map(x => parseJson<Package>(x.data)),
-      runs: r.map(x => parseJson<Run>(x.data)),
+      providers: p.map(x => ({ ...parseJson<Provider>(x.data), id: x.id })),
+      packages: k.map(x => ({ ...parseJson<Package>(x.data), id: x.id })),
+      runs: r.map(x => ({ ...parseJson<Run>(x.data), id: x.id })),
       config
     };
   } catch (err) {

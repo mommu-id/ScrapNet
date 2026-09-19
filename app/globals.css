@@ -17,6 +17,7 @@
 .datatable td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
 .datatable tbody tr:hover{background:#fbfdfa}
 .datatable tbody tr.selected{background:#f4faee}
+.provider-row.selected{background:#f4faee;padding-left:14px;padding-right:14px;border-radius:10px}
 .badge.insecure{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;display:inline-flex;align-items:center;gap:4px;font-weight:600}
 .view-toggle{display:inline-flex;background:#eef2ed;border-radius:8px;padding:3px;gap:2px}
 .view-toggle button{padding:6px 12px;border-radius:6px;font-size:12px;color:#55645a;background:none;border:none}
