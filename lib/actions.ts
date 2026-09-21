@@ -147,6 +147,79 @@ async function fetchOxygenPackages(): Promise<{ name: string; speed: number; pri
   return results;
 }
 
+async function fetchBiznetPackages(rawUrl: string, targetCity: string): Promise<{ name: string; speed: number; price: number; url: string; evidence: string }[]> {
+  let stateId = '11';
+  let cityId = '159';
+
+  try {
+    const u = new URL(rawUrl);
+    const pParam = u.searchParams.get('province');
+    const cParam = u.searchParams.get('city');
+    if (pParam) stateId = pParam;
+    if (cParam) cityId = cParam;
+  } catch {
+    // fallback default
+  }
+
+  // Jika URL tidak memiliki parameter spesifik, petakan nama kota target
+  if (stateId === '11' && cityId === '159' && targetCity) {
+    const c = targetCity.toLowerCase();
+    if (c.includes('surabaya')) { stateId = '15'; cityId = '264'; }
+    else if (c.includes('bandung')) { stateId = '12'; cityId = '181'; }
+    else if (c.includes('semarang')) { stateId = '13'; cityId = '220'; }
+    else if (c.includes('yogyakarta') || c.includes('jogja')) { stateId = '14'; cityId = '227'; }
+    else if (c.includes('tangerang selatan') || c.includes('tangsel')) { stateId = '16'; cityId = '273'; }
+    else if (c.includes('tangerang')) { stateId = '16'; cityId = '270'; }
+    else if (c.includes('bekasi')) { stateId = '12'; cityId = '183'; }
+    else if (c.includes('bogor')) { stateId = '12'; cityId = '179'; }
+    else if (c.includes('depok')) { stateId = '12'; cityId = '184'; }
+    else if (c.includes('denpasar') || c.includes('bali')) { stateId = '17'; cityId = '282'; }
+    else if (c.includes('malang')) { stateId = '15'; cityId = '259'; }
+    else if (c.includes('cirebon')) { stateId = '12'; cityId = '182'; }
+    else if (c.includes('surakarta') || c.includes('solo')) { stateId = '13'; cityId = '218'; }
+  }
+
+  const results: { name: string; speed: number; price: number; url: string; evidence: string }[] = [];
+  try {
+    const res = await fetch('https://mybiznet.biznetform.com/brim/product-city', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'ea795dc37d9daf0f003f462d6458df6e',
+        'User-Agent': 'ScrapNetBot/1.0'
+      },
+      body: JSON.stringify({ state_id: String(stateId), city_id: String(cityId) }),
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (!res.ok) return results;
+    const json = await res.json();
+    const monthly = json.data?.monthly || [];
+
+    for (const m of monthly) {
+      const charge = m.detail_charge?.charges?.[0];
+      const priceNum = charge ? Math.round(Number(charge.basicChargeAmount)) : Math.round(Number(m.prod_price));
+      const speedNum = Number(m.bandwidth);
+
+      if (speedNum > 0 && priceNum > 20000) {
+        const pkgName = `Biznet ${m.prod_name || m.prod_name_m || 'Home'}`;
+        const targetUrl = `https://biznethome.net/product/packages/?province=${stateId}&city=${cityId}#packageListCity`;
+        results.push({
+          name: pkgName,
+          speed: speedNum,
+          price: priceNum,
+          url: targetUrl,
+          evidence: `${pkgName}: ${speedNum} Mbps - Rp ${priceNum.toLocaleString('id-ID')}/bulan (PPN ${m.vat || 11}%). FUP: ${m.fup || 'Unlimited'} GB, Upload/Download ${m.uploaddownload || 'Simetris'}.`
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Biznet fetch error:', err);
+  }
+
+  return results;
+}
+
 export async function scrape(id: string) {
   const rows = await db()`SELECT data FROM providers WHERE id=${id}`;
   const p = rows[0] ? parseJson<Provider>(rows[0].data) : undefined;
@@ -176,6 +249,18 @@ export async function scrape(id: string) {
         }
       } catch (e) {
         console.warn('Oxygen adapter error:', e);
+      }
+    }
+
+    if (/biznethome\.net/i.test(p.domain) || /biznethome\.net/i.test(p.url)) {
+      try {
+        const biznetPackages = await fetchBiznetPackages(p.url, p.city);
+        if (biznetPackages.length) {
+          // Ganti cuplikan statis/banner IPTV yang ambigu dengan paket resmi terstruktur
+          items = biznetPackages;
+        }
+      } catch (e) {
+        console.warn('Biznet adapter error:', e);
       }
     }
 
