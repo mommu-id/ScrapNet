@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { authorized } from '../../../lib/auth';
-import type { Package } from '../../../lib/types';
+import type { Package, Provider } from '../../../lib/types';
 import { db, log, parseJson } from '../../../lib/db';
 import { discover, scrape, addManualProvider, withLock } from '../../../lib/actions';
 
@@ -25,6 +25,16 @@ const input = z.discriminatedUnion('action', [
     speed: z.number().int().min(1).max(10000),
     price: z.number().int().min(1000).max(100000000),
     tax: z.string().trim().max(100).optional(),
+    status: z.enum(['review', 'verified']).optional()
+  }),
+  z.object({
+    action: z.literal('add_package'),
+    providerId: idSchema,
+    name: z.string().trim().min(1).max(100),
+    speed: z.number().int().min(1).max(10000),
+    price: z.number().int().min(1000).max(100000000),
+    tax: z.string().trim().max(100).optional(),
+    url: z.string().trim().max(300).optional(),
     status: z.enum(['review', 'verified']).optional()
   })
 ]);
@@ -93,6 +103,29 @@ export async function POST(request: Request) {
         await sql`UPDATE packages SET data=${sql.json(updated)} WHERE id=${body.id}`;
         await log('Edit Paket', `Paket "${updated.name}" (${updated.provider}) diperbarui. Harga: Rp ${updated.price.toLocaleString('id-ID')}, Kecepatan: ${updated.speed} Mbps.`);
         return `Paket "${updated.name}" berhasil diperbarui.`;
+      }
+      if (body.action === 'add_package') {
+        const sql = db();
+        const provRows = await sql`SELECT data FROM providers WHERE id=${body.providerId}`;
+        if (!provRows.length) throw new Error('Provider tidak ditemukan.');
+        const prov = parseJson<Provider>(provRows[0].data);
+        const pkg: Package = {
+          id: crypto.randomUUID(),
+          providerId: body.providerId,
+          provider: prov.name,
+          name: body.name,
+          speed: body.speed,
+          price: body.price,
+          city: prov.city,
+          tax: body.tax || 'Belum diketahui',
+          url: body.url || prov.url,
+          status: body.status || 'verified',
+          capturedAt: new Date().toISOString(),
+          evidence: `Input manual pengelola: ${body.name} (${body.speed} Mbps) - Rp ${body.price.toLocaleString('id-ID')}/bulan.`
+        };
+        await sql`INSERT INTO packages(id, provider_id, data) VALUES(${pkg.id}, ${body.providerId}, ${sql.json(pkg)})`;
+        await log('Tambah Paket Manual', `Paket "${pkg.name}" (${pkg.provider}) berhasil ditambahkan.`);
+        return `Paket "${pkg.name}" berhasil ditambahkan.`;
       }
       const rows = await db()`UPDATE packages SET data=jsonb_set(data,'{status}','"verified"'::jsonb) WHERE id=${body.id} RETURNING id`;
       if (!rows.length) throw new Error('Paket tidak ditemukan.');

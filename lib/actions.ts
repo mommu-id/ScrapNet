@@ -220,6 +220,45 @@ async function fetchBiznetPackages(rawUrl: string, targetCity: string): Promise<
   return results;
 }
 
+async function fetchMyRepublicPackages(rawUrl: string, targetCity: string): Promise<{ name: string; speed: number; price: number; url: string; evidence: string }[]> {
+  const results: { name: string; speed: number; price: number; url: string; evidence: string }[] = [];
+  try {
+    const res = await fetch('https://www.myrepublic.co.id/api/gothel/product?populate=*', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.myrepublic.co.id/',
+        'product-content-type': 'tania'
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (!res.ok) return results;
+    const json = await res.json();
+    const items = json.data?.data || [];
+
+    for (const item of items) {
+      const a = item.attributes;
+      if (!a || a.is_business) continue;
+      const speed = Number(a.speed_mbps);
+      const price = Number(a.price);
+      if (speed > 0 && price > 20000 && !a.is_combo) {
+        const name = `MyRepublic ${a.name}`;
+        const features = (a.features?.data || []).map((f: { attributes?: { name?: string } }) => f.attributes?.name).filter(Boolean);
+        results.push({
+          name,
+          speed,
+          price,
+          url: rawUrl || 'https://myrepublic.co.id/package',
+          evidence: `${name}: ${speed} Mbps - Rp ${price.toLocaleString('id-ID')}/bulan (${a.price_hint || 'belum termasuk PPN 11%'}). Fitur: ${features.join(', ') || 'Tanpa FUP'}`
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('MyRepublic fetch error:', err);
+  }
+  return results;
+}
+
 export async function scrape(id: string) {
   const rows = await db()`SELECT data FROM providers WHERE id=${id}`;
   const p = rows[0] ? parseJson<Provider>(rows[0].data) : undefined;
@@ -261,6 +300,17 @@ export async function scrape(id: string) {
         }
       } catch (e) {
         console.warn('Biznet adapter error:', e);
+      }
+    }
+
+    if (/myrepublic\.co\.id/i.test(p.domain) || /myrepublic\.co\.id/i.test(p.url)) {
+      try {
+        const myrepPackages = await fetchMyRepublicPackages(p.url, p.city);
+        if (myrepPackages.length) {
+          items = myrepPackages;
+        }
+      } catch (e) {
+        console.warn('MyRepublic adapter error:', e);
       }
     }
 
