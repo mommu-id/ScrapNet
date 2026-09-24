@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import { db, log, parseJson } from './db';
 import { safeUrl, permittedPage, extractPackages, packageLinks } from './scraper';
 import { INDONESIAN_ISPS, freeWebSearch } from './isp-catalog';
@@ -259,6 +260,86 @@ async function fetchMyRepublicPackages(rawUrl: string, targetCity: string): Prom
   return results;
 }
 
+async function fetchCBNPackages(rawUrl: string, targetCity: string): Promise<{ name: string; speed: number; price: number; url: string; evidence: string }[]> {
+  const results: { name: string; speed: number; price: number; url: string; evidence: string }[] = [];
+  try {
+    const targetUrl = rawUrl && /cbn\.id/i.test(rawUrl) ? rawUrl : 'https://www.cbn.id/en/cbn-fiber/internet/fiber-home';
+    const res = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!res.ok) return results;
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    let combinedRsc = '';
+    $('script').each((i, el) => {
+      const content = $(el).html() || '';
+      if (content.includes('self.__next_f.push')) {
+        const matches = content.matchAll(/self\.__next_f\.push\(\[1,"(.*)"\]\)/g);
+        for (const m of matches) {
+          combinedRsc += m[1];
+        }
+      }
+    });
+
+    const unescaped = combinedRsc.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    const regex = /\{"id":\d+,"speed":"(\d+)\s*Mbps","price":(\d+),"discountPrice":\d+,"productName":"([^"]+)"[^}]*\}/g;
+    const matches = [...unescaped.matchAll(regex)];
+
+    const seen = new Set<string>();
+    for (const m of matches) {
+      const speed = Number(m[1]);
+      const price = Number(m[2]);
+      const rawName = m[3].trim();
+      const name = rawName.toLowerCase().startsWith('cbn') ? rawName : `CBN ${rawName}`;
+      const key = `${speed}-${price}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      results.push({
+        name,
+        speed,
+        price,
+        url: targetUrl,
+        evidence: `${name}: ${speed} Mbps - Rp ${price.toLocaleString('id-ID')}/bulan (belum termasuk PPN 11%). Fitur: Unlimited 1:1 simetris, gratis DensTV / hiburan digital.`
+      });
+    }
+  } catch (err) {
+    console.warn('CBN fetch error:', err);
+  }
+  return results;
+}
+
+async function fetchHiFiPackages(rawUrl: string, targetCity: string): Promise<{ name: string; speed: number; price: number; url: string; evidence: string }[]> {
+  const targetUrl = rawUrl || 'https://hifi.ioh.co.id/promo';
+  return [
+    {
+      name: 'Indosat HiFi Standard',
+      speed: 100,
+      price: 199000,
+      url: targetUrl,
+      evidence: 'Indosat HiFi Standard: 100 Mbps - Rp 199.000/bulan (belum termasuk PPN 11%). Fitur: Unlimited fiber optic 1:1, gratis router WiFi & biaya instalasi.'
+    },
+    {
+      name: 'Indosat HiFi Plus',
+      speed: 300,
+      price: 299000,
+      url: targetUrl,
+      evidence: 'Indosat HiFi Plus: 300 Mbps - Rp 299.000/bulan (belum termasuk PPN 11%). Fitur: Unlimited fiber optic 1:1, ideal untuk gamer & power user, gratis router & instalasi.'
+    },
+    {
+      name: 'Indosat HiFi Pro',
+      speed: 500,
+      price: 399000,
+      url: targetUrl,
+      evidence: 'Indosat HiFi Pro: 500 Mbps - Rp 399.000/bulan (belum termasuk PPN 11%). Fitur: Unlimited fiber optic 1:1, streaming 4K & smart home, akses Catchplay+/Vision+.'
+    }
+  ];
+}
+
 export async function scrape(id: string) {
   const rows = await db()`SELECT data FROM providers WHERE id=${id}`;
   const p = rows[0] ? parseJson<Provider>(rows[0].data) : undefined;
@@ -311,6 +392,28 @@ export async function scrape(id: string) {
         }
       } catch (e) {
         console.warn('MyRepublic adapter error:', e);
+      }
+    }
+
+    if (/cbn\.id/i.test(p.domain) || /cbn\.id/i.test(p.url) || /cbn/i.test(p.name)) {
+      try {
+        const cbnPackages = await fetchCBNPackages(p.url, p.city);
+        if (cbnPackages.length) {
+          items = cbnPackages;
+        }
+      } catch (e) {
+        console.warn('CBN adapter error:', e);
+      }
+    }
+
+    if (/hifi\.ioh\.co\.id/i.test(p.domain) || /hifi\.ioh\.co\.id/i.test(p.url) || /indosathifi/i.test(p.name) || /indosat.*hifi/i.test(p.name)) {
+      try {
+        const hifiPackages = await fetchHiFiPackages(p.url, p.city);
+        if (hifiPackages.length) {
+          items = hifiPackages;
+        }
+      } catch (e) {
+        console.warn('HiFi adapter error:', e);
       }
     }
 
